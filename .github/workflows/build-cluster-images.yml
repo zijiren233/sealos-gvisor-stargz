@@ -87,9 +87,10 @@ jobs:
           GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
           IMAGE_NAME_FILTER: ${{ inputs.image }}
         run: |
-          set -e
-          eval "$(bash ./.github/scripts/matrix.sh)"
-          echo "$matrix" | jq -r '.include[] | "\(.project) \(.version)"' | sort -u | while read -r project version; do
+          set -eo pipefail
+          matrix_line=$(bash ./.github/scripts/matrix.sh)
+          matrix_json=${matrix_line#matrix=}
+          echo "$matrix_json" | jq -r '.include[] | "\(.project) \(.version)"' | sort -u | while read -r project version; do
             if [[ -n "$IMAGE_NAME_FILTER" && "$project" != "$IMAGE_NAME_FILTER" ]]; then
               continue
             fi
