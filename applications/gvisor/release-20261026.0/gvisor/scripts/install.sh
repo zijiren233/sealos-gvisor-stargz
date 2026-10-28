@@ -83,9 +83,7 @@ if [[ -x $bin_dir/runsc ]]; then
     log "gVisor ${expected_version} already installed; refreshing configuration"
     fresh_install=0
   else
-    [[ ${GVISOR_UPGRADE:-false} == true ]] || \
-      die "runsc '${current:-unknown}' is installed but this image ships ${expected_version}; set GVISOR_UPGRADE=true to replace it"
-    log "upgrading runsc ${current:-unknown} -> ${expected_version}"
+    log "upgrading runsc ${current:-unknown} -> ${expected_version} (previous binary and config backed up)"
     backup_dir=$backup_root/pre-upgrade-$(date +%Y%m%d%H%M%S)
     install -d -m 700 "$backup_dir"
     cp -a "$bin_dir/runsc" "$backup_dir/" 2>/dev/null || true
@@ -94,11 +92,19 @@ if [[ -x $bin_dir/runsc ]]; then
   fi
 fi
 
+# Effective metrics endpoint: an explicit GVISOR_METRICS value wins
+# ("none"/"off" disables); otherwise upgrades inherit the endpoint from
+# an existing runsc.toml so a running metrics exporter keeps working.
+effective_metrics=${GVISOR_METRICS:-}
+if [[ -z $effective_metrics && -f $runsc_toml ]]; then
+  effective_metrics=$(sed -nE 's/^[[:space:]]*metric-server[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$runsc_toml" | head -n1)
+fi
+[[ $effective_metrics == none || $effective_metrics == off ]] && effective_metrics=""
+
 render_runsc_toml() {
   local platform=${GVISOR_PLATFORM:-systrap}
   local network=${GVISOR_NETWORK:-sandbox}
   local root_dir=${GVISOR_ROOT:-/run/containerd/runsc}
-  local metrics=${GVISOR_METRICS:-}
   cat <<EOF
 binary_name = "$bin_dir/runsc"
 root = "$root_dir"
@@ -112,7 +118,7 @@ root = "$root_dir"
   file-access = "exclusive"
   file-access-mounts = "shared"
 EOF
-  [[ -z $metrics ]] || printf '  metric-server = "%s"\n' "$metrics"
+  [[ -z $effective_metrics ]] || printf '  metric-server = "%s"\n' "$effective_metrics"
 }
 
 render_containerd_config() {
@@ -196,8 +202,9 @@ else
   log 'configuration unchanged; containerd restart not needed'
 fi
 
-# Optional metrics exporter; enabled only when GVISOR_METRICS is set.
-if [[ -n ${GVISOR_METRICS:-} ]]; then
+# Optional metrics exporter; enabled when an endpoint is configured
+# (explicitly or inherited from a previous install).
+if [[ -n $effective_metrics ]]; then
   root_dir=${GVISOR_ROOT:-/run/containerd/runsc}
   cat >/etc/systemd/system/gvisor-metrics.service <<EOF
 [Unit]
@@ -206,7 +213,7 @@ After=containerd.service
 [Service]
 Type=simple
 ExecStartPre=/usr/bin/install -d -m 0700 ${root_dir}/k8s.io
-ExecStart=${bin_dir}/runsc --root=${root_dir}/k8s.io --metric-server=${GVISOR_METRICS} metric-server
+ExecStart=${bin_dir}/runsc --root=${root_dir}/k8s.io --metric-server=${effective_metrics} metric-server
 Restart=always
 RestartSec=5
 [Install]

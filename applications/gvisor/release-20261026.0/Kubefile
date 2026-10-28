@@ -4,7 +4,6 @@ ENV GVISOR_SKIP_MASTERS="true" \
     GVISOR_PLATFORM="systrap" \
     GVISOR_NETWORK="sandbox" \
     GVISOR_ROOT="/run/containerd/runsc" \
-    GVISOR_METRICS="" \
-    GVISOR_UPGRADE="false"
+    GVISOR_METRICS=""
 COPY gvisor gvisor
 CMD ["bash gvisor/scripts/install.sh"]

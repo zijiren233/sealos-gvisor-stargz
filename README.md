@@ -67,8 +67,10 @@ Both images are sealos **patch** cluster images (`LABEL sealos.io/type="patch"`)
   payload and re-run the installer
 - re-running `sealos run` of the same image is skipped by sealos; force
   with `sealos run -f` — the installers are idempotent (same version
-  means config repair only, containerd is restarted only when the
-  effective configuration actually changed)
+  means config repair only; a different version is an in-place upgrade:
+  the previous binaries and config are backed up under
+  `/var/backups/sealos-{gvisor,stargz}/` and containerd is restarted
+  only when the effective configuration actually changed)
 - control-plane nodes are skipped by default and only maintain the
   RuntimeClass object; set `*_SKIP_MASTERS=false` for single-node
   clusters
@@ -91,8 +93,7 @@ Environment variables can be passed with `sealos run -e KEY=VALUE`.
 | `GVISOR_PLATFORM` | `systrap` | gVisor platform |
 | `GVISOR_NETWORK` | `sandbox` | gVisor network mode |
 | `GVISOR_ROOT` | `/run/containerd/runsc` | runsc state root |
-| `GVISOR_METRICS` | (empty) | e.g. `127.0.0.1:2024` to enable the metrics exporter service |
-| `GVISOR_UPGRADE` | `false` | allow replacing a different installed runsc version |
+| `GVISOR_METRICS` | (empty) | metrics exporter endpoint, e.g. `127.0.0.1:2024`; when unset, an upgrade inherits the endpoint from an existing `/etc/containerd/runsc.toml` so a running exporter keeps working; `none` disables |
 
 The generated `/etc/containerd/runsc.toml` also enables
 `systemd-cgroup`, `oci-seccomp`, `directfs`, `overlay2=root:self`,
@@ -107,7 +108,6 @@ The generated `/etc/containerd/runsc.toml` also enables
 | `STARGZ_RUN_DIR` | `/run/containerd-stargz-grpc` | socket/runtime dir |
 | `STARGZ_REWIRE_CRI_SHIM` | `true` | point sealos image-cri-shim's `cri:` endpoint at the stargz CRI keychain so pull credentials work |
 | `STARGZ_INSECURE_REGISTRY` | `sealos.hub:5000` | comma-separated plain-HTTP registries the snapshotter may fetch from (the built-in sealos registry); empty to disable |
-| `STARGZ_UPGRADE` | `false` | allow replacing a different installed version |
 
 The snapshotter runs with `no_background_fetch=true`,
 `metadata_store="db"`, a persistent FUSE manager (survives snapshotter

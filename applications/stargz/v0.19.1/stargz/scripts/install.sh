@@ -93,14 +93,14 @@ if [[ -x $bin_dir/containerd-stargz-grpc ]]; then
     log "stargz-snapshotter ${expected_version} already installed; refreshing configuration"
     fresh_install=0
   else
-    [[ ${STARGZ_UPGRADE:-false} == true ]] || \
-      die "containerd-stargz-grpc '${current:-unknown}' is installed but this image ships ${expected_version}; set STARGZ_UPGRADE=true to replace it"
-    log "upgrading stargz-snapshotter ${current:-unknown} -> ${expected_version}"
+    log "upgrading stargz-snapshotter ${current:-unknown} -> ${expected_version} (existing snapshot data is preserved)"
   fi
 fi
 
-if [[ $fresh_install -eq 1 && -d $stargz_root ]] && find "$stargz_root" -mindepth 1 -print -quit | grep -q .; then
-  die "existing data under $stargz_root; refusing a fresh install on top of it"
+# Orphaned snapshot data with no managed binary is ambiguous (e.g. a
+# rebuilt node); upgrading an installation that owns the data is fine.
+if [[ ! -x $bin_dir/containerd-stargz-grpc && -d $stargz_root ]] && find "$stargz_root" -mindepth 1 -print -quit | grep -q .; then
+  die "existing data under $stargz_root but no managed snapshotter binary; inspect and move the data before installing"
 fi
 
 write_if_changed() {
