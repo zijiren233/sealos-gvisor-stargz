@@ -1,0 +1,81 @@
+name: "PR Cluster Image Validation"
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "applications/**"
+      - ".github/scripts/**"
+      - ".github/workflows/pr-image-build-validation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-image-validation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  resolve-and-check:
+    name: Script Syntax Check
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: bash -n all scripts
+        run: |
+          set -e
+          shopt -s nullglob
+          files=(.github/scripts/*.sh applications/*/*/init.sh applications/*/*/*/scripts/*.sh)
+          [[ ${#files[@]} -gt 0 ]] || { echo "no scripts found"; exit 1; }
+          for f in "${files[@]}"; do
+            echo "checking $f"
+            bash -n "$f"
+          done
+
+      - name: Resolve matrix
+        id: set-matrix
+        run: |
+          bash ./.github/scripts/matrix.sh >> "$GITHUB_OUTPUT"
+
+  build-and-inspect:
+    name: Validate ${{ matrix.project }}:${{ matrix.version }} (${{ matrix.arch }})
+    runs-on: ubuntu-24.04
+    needs: [resolve-and-check]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.resolve-and-check.outputs.matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download release payloads
+        working-directory: applications/${{ matrix.project }}/${{ matrix.version }}
+        run: |
+          bash init.sh ${{ matrix.arch }}
+
+      - name: Build image (no publish)
+        working-directory: applications/${{ matrix.project }}/${{ matrix.version }}
+        env:
+          SKIP_IMAGE_PUBLISH: "true"
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          BUILD_COMMIT_ID: ${{ github.sha }}
+        run: |
+          bash ../../../.github/scripts/build.sh ${{ matrix.arch }}
+
+      - name: Inspect image metadata
+        working-directory: applications/${{ matrix.project }}/${{ matrix.version }}
+        run: |
+          set -e
+          OWNER="${{ github.repository_owner }}"
+          TAG="ghcr.io/${OWNER}/${{ matrix.project }}:${{ matrix.version }}-${{ matrix.arch }}"
+          label=$(docker inspect --format '{{index .Config.Labels "sealos.io.type"}}' "$TAG")
+          [[ "$label" == "patch" ]] || { echo "sealos.io/type label is '$label', expected 'patch'"; exit 1; }
+          cmd=$(docker inspect --format '{{json .Config.Cmd}}' "$TAG")
+          echo "$cmd" | grep -q "scripts/install.sh" || { echo "CMD does not reference scripts/install.sh: $cmd"; exit 1; }
+          echo "image $TAG OK (patch label + install CMD verified)"

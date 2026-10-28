@@ -1,0 +1,99 @@
+name: "Build Cluster Images"
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: "Component name (gvisor, stargz); empty = all"
+        required: false
+        default: ""
+        type: string
+      push:
+        description: "Publish images to the registry"
+        required: false
+        default: true
+        type: boolean
+  push:
+    branches: [main]
+    paths:
+      - "applications/**"
+      - ".github/scripts/**"
+      - ".github/workflows/build-cluster-images.yml"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: build-cluster-images-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  resolve-versions:
+    name: Resolve Build Matrix
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve matrix
+        id: set-matrix
+        env:
+          IMAGE_NAME: ${{ inputs.image }}
+        run: |
+          bash ./.github/scripts/matrix.sh >> "$GITHUB_OUTPUT"
+
+  build-images:
+    name: Build ${{ matrix.project }}:${{ matrix.version }} (${{ matrix.arch }})
+    runs-on: ubuntu-24.04
+    needs: [resolve-versions]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.resolve-versions.outputs.matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download release payloads
+        working-directory: applications/${{ matrix.project }}/${{ matrix.version }}
+        run: |
+          bash init.sh ${{ matrix.arch }}
+
+      - name: Build and publish image
+        working-directory: applications/${{ matrix.project }}/${{ matrix.version }}
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          BUILD_COMMIT_ID: ${{ github.sha }}
+          SKIP_IMAGE_PUBLISH: ${{ (github.event_name == 'push' || inputs.push == true) && 'false' || 'true' }}
+        run: |
+          bash ../../../.github/scripts/build.sh ${{ matrix.arch }}
+
+  merge-manifests:
+    name: Merge Multi-Arch Manifests
+    runs-on: ubuntu-24.04
+    needs: [resolve-versions, build-images]
+    if: github.event_name == 'push' || inputs.push == true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create and push multi-arch manifests
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          IMAGE_NAME_FILTER: ${{ inputs.image }}
+        run: |
+          set -e
+          eval "$(bash ./.github/scripts/matrix.sh)"
+          echo "$matrix" | jq -r '.include[] | "\(.project) \(.version)"' | sort -u | while read -r project version; do
+            if [[ -n "$IMAGE_NAME_FILTER" && "$project" != "$IMAGE_NAME_FILTER" ]]; then
+              continue
+            fi
+            echo "::group::manifest ${project}:${version}"
+            bash ./.github/scripts/manifest.sh "$project" "$version" "${{ secrets.GITHUB_TOKEN }}"
+            echo "::endgroup::"
+          done

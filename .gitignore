@@ -1,0 +1,9 @@
+# Release payloads downloaded by init.sh at image build time
+applications/gvisor/*/gvisor/gvisor-*.tar.zstd
+applications/gvisor/*/gvisor/SHA512SUMS
+applications/gvisor/*/gvisor/VERSION
+applications/stargz/*/stargz/stargz-snapshotter-*.tar.gz
+applications/stargz/*/stargz/*.sha256sum
+applications/stargz/*/stargz/VERSION
+
+.DS_Store
