@@ -116,16 +116,14 @@ EOF
 }
 
 render_containerd_config() {
-  # Strip any previous runsc blocks written by this image, then append
-  # the current ones, so repeated runs converge instead of duplicating.
-  awk '
-    /^[[:space:]]*\[plugins\."io\.containerd\.grpc\.v1\.cri"\.containerd\.runtimes\.runsc(\]|\.options\])[[:space:]]*$/ { skip=1; next }
-    /^[[:space:]]*\[/ { skip=0 }
-    skip { next }
-    { print }
-  ' "$cfg"
-  cat <<'EOF'
-
+  # Replaces this image's runsc handler blocks in place, keeping their
+  # position in the file; appends them at the end only when absent.
+  # This keeps repeated runs byte-stable (regardless of the order other
+  # runtime images re-run) so containerd is not restarted when nothing
+  # actually changed.
+  local blocks
+  blocks=$(mktemp)
+  cat >"$blocks" <<'EOF'
 [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]
   runtime_type = "io.containerd.runsc.v1"
   snapshotter = "overlayfs"
@@ -134,6 +132,24 @@ render_containerd_config() {
   TypeUrl = "io.containerd.runsc.v1.options"
   ConfigPath = "/etc/containerd/runsc.toml"
 EOF
+  awk '
+    NR==FNR { block[++n] = $0; next }
+    /^[[:space:]]*\[plugins\."io\.containerd\.grpc\.v1\.cri"\.containerd\.runtimes\.runsc\][[:space:]]*$/ {
+      if (!done) { for (i = 1; i <= n; i++) print block[i]; done = 1 }
+      skip = 1; pending = 0; next
+    }
+    /^[[:space:]]*\[plugins\."io\.containerd\.grpc\.v1\.cri"\.containerd\.runtimes\.runsc\.options\][[:space:]]*$/ { skip = 1; next }
+    /^[[:space:]]*\[/ {
+      if (skip && pending) print ""
+      skip = 0
+      pending = 0
+    }
+    skip && /^[[:space:]]*$/ { pending = 1; next }
+    skip { next }
+    { print }
+    END { if (!done) { print ""; for (i = 1; i <= n; i++) print block[i] } }
+  ' "$blocks" "$cfg"
+  rm -f "$blocks"
 }
 
 write_if_changed() {
@@ -156,7 +172,13 @@ write_if_changed() {
 
 log 'writing runsc and containerd configuration'
 render_runsc_toml | write_if_changed "$runsc_toml" || true
-render_containerd_config | write_if_changed "$cfg" || true
+render_tmp=$(mktemp)
+if ! render_containerd_config >"$render_tmp"; then
+  rm -f "$render_tmp"
+  die 'failed to render containerd configuration'
+fi
+write_if_changed "$cfg" <"$render_tmp" || true
+rm -f "$render_tmp"
 
 if [[ $fresh_install -eq 1 ]]; then
   log "installing binaries from ${artifact}"

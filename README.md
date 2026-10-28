@@ -8,7 +8,7 @@ cluster:
 |---|---|---|---|
 | gvisor | `ghcr.io/zijiren233/gvisor:<release>` | gVisor `runsc` + `containerd-shim-runsc-v1` | `gvisor` (handler `runsc`) |
 | stargz | `ghcr.io/zijiren233/stargz:<version>` | stargz-snapshotter (`containerd-stargz-grpc`, persistent FUSE manager, CRI keychain) | `stargz` (handler `stargz`) |
-| stargz-gvisor | planned | only the combined handler + RuntimeClass; requires both images above | `gvisor-stargz` (handler `runsc-stargz`) |
+| stargz-gvisor | `ghcr.io/zijiren233/stargz-gvisor:v1` | combined handler registration only (no binaries); requires both images above | `gvisor-stargz` (handler `runsc-stargz`) |
 
 Each image is self-contained and independent: they can be installed alone
 or together, in any order.
@@ -18,13 +18,14 @@ or together, in any order.
 ```bash
 sealos run ghcr.io/zijiren233/gvisor:release-20261026.0
 sealos run ghcr.io/zijiren233/stargz:v0.19.1
+sealos run ghcr.io/zijiren233/stargz-gvisor:v1   # optional: combined runsc + stargz handler
 ```
 
-Then schedule pods with the corresponding `runtimeClassName: gvisor` or
-`runtimeClassName: stargz`.
+Then schedule pods with the corresponding `runtimeClassName: gvisor`,
+`runtimeClassName: stargz` or `runtimeClassName: gvisor-stargz`.
 
-When pulling container images through the stargz snapshotter with a
-non-default handler, keep the CRI pull annotation so pulls use the same
+When pulling container images with a non-default handler through the
+stargz snapshotter, keep the CRI pull annotation so pulls use the same
 snapshotter as pod creation (see `docs` in the containerd CRI config):
 
 ```yaml
@@ -33,6 +34,16 @@ metadata:
     io.containerd.cri.runtime-handler: stargz
 spec:
   runtimeClassName: stargz
+```
+
+The same applies to the combined runtime with handler `runsc-stargz`:
+
+```yaml
+metadata:
+  annotations:
+    io.containerd.cri.runtime-handler: runsc-stargz
+spec:
+  runtimeClassName: gvisor-stargz
 ```
 
 ## Requirements
@@ -106,6 +117,18 @@ restarts), the CRI keychain (which also inherits containerd's
 images is done by the snapshotter itself, so the built-in sealos
 registry must be listed as insecure for eStargz pulls from it to work.
 
+### stargz-gvisor
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `STARGZ_GVISOR_SKIP_MASTERS` | `true` | skip handler registration on control-plane nodes |
+
+The combined image registers the `runsc-stargz` handler (runtime
+`io.containerd.runsc.v1`, snapshotter `stargz`) and applies the
+`gvisor-stargz` RuntimeClass. It refuses to run unless the gvisor image
+(runsc + runsc.toml) and the stargz image (proxy_plugins.stargz) are
+already installed, and re-runs only repair the handler configuration.
+
 ## Uninstall
 
 ```bash
@@ -152,6 +175,9 @@ applications/
     ├── init.sh
     └── stargz/{scripts,manifests}/...
 ```
+
+`stargz-gvisor/v1/` follows the same layout without `init.sh` — it
+embeds no release payloads.
 
 Build locally:
 

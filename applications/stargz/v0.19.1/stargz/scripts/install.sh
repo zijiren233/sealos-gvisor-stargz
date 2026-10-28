@@ -212,38 +212,90 @@ $stargz_root/stargz-fuse-manager.log {
 EOF
 }
 
-# containerd config merge: keep pull annotations enabled for the CRI
-# table, strip previous stargz blocks written by this image, then append
-# the current ones, so repeated runs converge instead of duplicating.
-render_containerd_config() {
+# The two merge helpers below replace one block group (main table plus
+# its sub table) in place, keeping its position in the stream; they
+# append the group at the end only when absent. This keeps repeated runs
+# byte-stable regardless of the order other runtime images re-run.
+# Header regexes are inline (not -v variables) so backslash escapes
+# survive awk's -v escape processing.
+replace_handler_group() {
+  local blocks=$1
   awk '
-    BEGIN { in_cri=0; found=0 }
-    /^[[:space:]]*\[plugins\."io\.containerd\.grpc\.v1\.cri"\.containerd\][[:space:]]*$/ { in_cri=1; found=1; print; next }
-    /^[[:space:]]*\[/ { if (in_cri && !seen) { print "  disable_snapshot_annotations = false"; seen=1 }; in_cri=0 }
-    in_cri && /^[[:space:]]*disable_snapshot_annotations[[:space:]]*=/ { print "  disable_snapshot_annotations = false"; seen=1; next }
-    /^[[:space:]]*\[plugins\."io\.containerd\.grpc\.v1\.cri"\.containerd\.runtimes\.stargz(\]|\.options\])[[:space:]]*$/ { skip=1; next }
-    /^[[:space:]]*\[proxy_plugins\.stargz(\]|\.exports\])[[:space:]]*$/ { skip=1; next }
-    /^[[:space:]]*\[/ { skip=0 }
+    NR==FNR { block[++n] = $0; next }
+    /^\[plugins\."io\.containerd\.grpc\.v1\.cri"\.containerd\.runtimes\.stargz\][[:space:]]*$/ {
+      if (!done) { for (i = 1; i <= n; i++) print block[i]; done = 1 }
+      skip = 1; pending = 0; next
+    }
+    /^\[plugins\."io\.containerd\.grpc\.v1\.cri"\.containerd\.runtimes\.stargz\.options\][[:space:]]*$/ { skip = 1; next }
+    /^[[:space:]]*\[/ {
+      if (skip && pending) print ""
+      skip = 0
+      pending = 0
+    }
+    skip && /^[[:space:]]*$/ { pending = 1; next }
     skip { next }
     { print }
-    END {
-      if (in_cri && !seen) print "  disable_snapshot_annotations = false"
-      if (!found) exit 2
-    }
-  ' "$cfg"
-  cat <<EOF
+    END { if (!done) { print ""; for (i = 1; i <= n; i++) print block[i] } }
+  ' "$blocks" -
+}
 
+replace_proxy_group() {
+  local blocks=$1
+  awk '
+    NR==FNR { block[++n] = $0; next }
+    /^\[proxy_plugins\.stargz\][[:space:]]*$/ {
+      if (!done) { for (i = 1; i <= n; i++) print block[i]; done = 1 }
+      skip = 1; pending = 0; next
+    }
+    /^\[proxy_plugins\.stargz\.exports\][[:space:]]*$/ { skip = 1; next }
+    /^[[:space:]]*\[/ {
+      if (skip && pending) print ""
+      skip = 0
+      pending = 0
+    }
+    skip && /^[[:space:]]*$/ { pending = 1; next }
+    skip { next }
+    { print }
+    END { if (!done) { print ""; for (i = 1; i <= n; i++) print block[i] } }
+  ' "$blocks" -
+}
+
+# containerd config merge: force disable_snapshot_annotations = false
+# inside the CRI containerd table (pull annotations must survive for
+# handler-scoped snapshotters), then register/refresh this image's
+# handler and proxy plugin block groups in place.
+render_containerd_config() {
+  local handler_blocks proxy_blocks
+  handler_blocks=$(mktemp)
+  proxy_blocks=$(mktemp)
+  cat >"$handler_blocks" <<'EOF'
 [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.stargz]
   runtime_type = "io.containerd.runc.v2"
   snapshotter = "stargz"
 [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.stargz.options]
   SystemdCgroup = true
+EOF
+  cat >"$proxy_blocks" <<EOF
 [proxy_plugins.stargz]
   type = "snapshot"
   address = "$snapshot_sock"
 [proxy_plugins.stargz.exports]
   root = "$stargz_root"
 EOF
+  awk '
+    BEGIN { in_cri=0; found=0 }
+    /^[[:space:]]*\[plugins\."io\.containerd\.grpc\.v1\.cri"\.containerd\][[:space:]]*$/ { in_cri=1; found=1; print; next }
+    /^[[:space:]]*\[/ { if (in_cri && !seen) { print "  disable_snapshot_annotations = false"; seen=1 }; in_cri=0 }
+    in_cri && /^[[:space:]]*disable_snapshot_annotations[[:space:]]*=/ { print "  disable_snapshot_annotations = false"; seen=1; next }
+    { print }
+    END {
+      if (in_cri && !seen) print "  disable_snapshot_annotations = false"
+      if (!found) exit 2
+    }
+  ' "$cfg" \
+    | replace_handler_group "$handler_blocks" \
+    | replace_proxy_group "$proxy_blocks"
+  rm -f "$handler_blocks" "$proxy_blocks"
 }
 
 render_stargz_toml | write_if_changed "$config_dir/config.toml" || true
@@ -251,7 +303,13 @@ render_service | write_if_changed "/etc/systemd/system/$stargz_service" || true
 render_containerd_dropin | write_if_changed "/etc/systemd/system/containerd.service.d/20-stargz.conf" || true
 render_shim_dropin | write_if_changed "/etc/systemd/system/image-cri-shim.service.d/20-stargz.conf" || true
 render_logrotate | write_if_changed /etc/logrotate.d/stargz-snapshotter || true
-render_containerd_config | write_if_changed "$cfg" || true
+render_tmp=$(mktemp)
+if ! render_containerd_config >"$render_tmp"; then
+  rm -f "$render_tmp"
+  die 'CRI containerd table not found in containerd config'
+fi
+write_if_changed "$cfg" <"$render_tmp" || true
+rm -f "$render_tmp"
 
 rewired_shim=0
 if [[ ${STARGZ_REWIRE_CRI_SHIM:-true} == true ]]; then

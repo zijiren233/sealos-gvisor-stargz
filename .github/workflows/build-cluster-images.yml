@@ -59,7 +59,11 @@ jobs:
       - name: Download release payloads
         working-directory: applications/${{ matrix.project }}/${{ matrix.version }}
         run: |
-          bash init.sh ${{ matrix.arch }}
+          if [[ -f init.sh ]]; then
+            bash init.sh ${{ matrix.arch }}
+          else
+            echo "no init.sh; payload-free image"
+          fi
 
       - name: Build and publish image
         working-directory: applications/${{ matrix.project }}/${{ matrix.version }}
