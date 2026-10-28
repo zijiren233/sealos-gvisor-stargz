@@ -352,7 +352,10 @@ fi
 
 systemctl is-active --quiet containerd || die 'containerd is not active'
 systemctl is-active --quiet "$stargz_service" || die "$stargz_service is not active"
-ctr plugins ls 2>/dev/null | grep -q stargz || warn 'stargz plugin not visible in ctr plugins ls'
+# capture instead of piping: grep -q closes early and kills ctr with
+# SIGPIPE under pipefail, producing a false warning
+plugins_out=$(ctr plugins ls 2>/dev/null || true)
+[[ $plugins_out == *stargz* ]] || warn 'stargz plugin not visible in ctr plugins ls'
 if command -v crictl >/dev/null 2>&1; then
   crictl --runtime-endpoint unix:///run/containerd/containerd.sock info >/dev/null || die 'CRI health check failed'
 else

@@ -31,6 +31,14 @@ BUILD_FILE=Kubefile
 [[ -f Dockerfile ]] && BUILD_FILE=Dockerfile
 [[ -f "$BUILD_FILE" ]] || { echo "$BUILD_FILE not found in $(pwd)" >&2; exit 1; }
 
+# Components with init.sh embed release payloads; refuse to build an
+# image whose payload was never downloaded (a context without the
+# tarball would otherwise build "successfully" but be unusable).
+if [[ -f init.sh && ! -f "${NAME}/VERSION" ]]; then
+  echo "init.sh must run before build.sh (missing ${NAME}/VERSION in the context)" >&2
+  exit 1
+fi
+
 export DOCKER_BUILDKIT=${DOCKER_BUILDKIT:-1}
 TAG="${IMAGE_NAME}:${VERSION}-${ARCH}"
 
