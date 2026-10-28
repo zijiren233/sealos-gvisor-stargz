@@ -120,13 +120,6 @@ workloads whose images were pulled through stargz first.
 
 ## Known limitations
 
-- **kubectl port-forward into gVisor sandboxes**: writing to imported
-  Unix sockets can duplicate bytes under backpressure (upstream
-  [google/gvisor#15660](https://github.com/google/gvisor/issues/15660),
-  fix [google/gvisor#15661](https://github.com/google/gvisor/pull/15661),
-  checked 2026-10-16). Apps listening only on `127.0.0.1` inside the
-  sandbox are not reachable via the standard containerd port-forward
-  path at all; use Services/Ingress for production traffic.
 - **kube-proxy-free CNI (e.g. Cilium in kube-proxy replacement mode)**:
   gVisor sandbox sockets bypass in-pod socket load balancing; set
   `socketLB.hostNamespaceOnly=true` (cluster-level Helm change, apply it
