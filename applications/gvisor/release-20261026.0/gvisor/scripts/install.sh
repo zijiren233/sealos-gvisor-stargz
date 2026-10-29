@@ -247,7 +247,5 @@ else
   warn 'crictl not found; skipping CRI health check'
 fi
 
-if is_control_plane; then
-  apply_runtimeclass
-fi
+apply_runtimeclass
 log "gVisor ${expected_version} installed (handler: runsc, RuntimeClass: gvisor)"

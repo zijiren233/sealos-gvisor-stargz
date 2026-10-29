@@ -146,7 +146,5 @@ else
   warn 'crictl not found; skipping CRI health check'
 fi
 
-if is_control_plane; then
-  apply_runtimeclass
-fi
+apply_runtimeclass
 log 'combined runtime registered (handler: runsc-stargz, RuntimeClass: gvisor-stargz)'

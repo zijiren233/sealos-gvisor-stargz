@@ -379,7 +379,5 @@ else
 fi
 "$bin_dir/containerd-stargz-grpc" --version | head -n1
 
-if is_control_plane; then
-  apply_runtimeclass
-fi
+apply_runtimeclass
 log "stargz-snapshotter ${expected_version} installed (handler: stargz, RuntimeClass: stargz)"
