@@ -79,12 +79,29 @@ render_containerd_config() {
   # order other runtime images re-run) so containerd is not restarted
   # when nothing actually changed.
   local blocks
+  # Mirror the runsc handler's stream port-forward setting (set by the
+  # gvisor image) onto this handler so both stay in sync; the gvisor
+  # image is the single control point for the feature.
+  local pf_binary pf_root
+  read -r pf_binary pf_root < <(awk '
+    /^[[:space:]]*\[plugins\."io\.containerd\.grpc\.v1\.cri"\.containerd\.runtimes\.runsc\][[:space:]]*$/ { inrun = 1; next }
+    /^[[:space:]]*\[/ { inrun = 0 }
+    inrun && /^[[:space:]]*runsc_port_forward_binary[[:space:]]*=/ { gsub(/[",[:space:]]/, "", $3); b = $3 }
+    inrun && /^[[:space:]]*runsc_port_forward_root[[:space:]]*=/ { gsub(/[",[:space:]]/, "", $3); r = $3 }
+    END { printf "%s %s\n", b, r }
+  ' "$cfg")
   blocks=$(mktemp)
   cat >"$blocks" <<'EOF'
 [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc-stargz]
   runtime_type = "io.containerd.runsc.v1"
   snapshotter = "stargz"
   privileged_without_host_devices = true
+EOF
+  if [[ -n $pf_binary && -n $pf_root ]]; then
+    printf '  runsc_port_forward_binary = "%s"\n  runsc_port_forward_root = "%s"\n' \
+      "$pf_binary" "$pf_root" >>"$blocks"
+  fi
+  cat >>"$blocks" <<'EOF'
 [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc-stargz.options]
   TypeUrl = "io.containerd.runsc.v1.options"
   ConfigPath = "/etc/containerd/runsc.toml"

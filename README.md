@@ -135,6 +135,13 @@ Environment variables can be passed with `sealos run -e KEY=VALUE`.
 | `GVISOR_NETWORK` | `sandbox` | gVisor network mode |
 | `GVISOR_ROOT` | `/run/containerd/runsc` | runsc state root |
 | `GVISOR_METRICS` | (empty) | metrics exporter endpoint, e.g. `127.0.0.1:2024`; when unset, an upgrade inherits the endpoint from an existing `/etc/containerd/runsc.toml` so a running exporter keeps working; `none` disables |
+| `GVISOR_PORT_FORWARD` | `false` | opt-in runsc stream port forwarding (requires a `containerd-gvisor-pf` build): forwarded connections bridge into the gVisor Sentry netstack, so applications listening on the sandbox loopback become reachable. Stock containerd ignores the extra handler fields, so enabling is safe cluster-wide |
+| `GVISOR_PORT_FORWARD_BINARY` | `/usr/local/bin/runsc` | helper binary passed to containerd; must be an absolute path |
+| `GVISOR_PORT_FORWARD_ROOT` | `$GVISOR_ROOT/k8s.io` | runsc runtime root for CRI sandbox lookup; must be an absolute path |
+
+The combined `stargz-gvisor` image mirrors the `runsc` handler's
+port-forward setting onto `runsc-stargz` automatically — the gvisor
+image is the single control point for the feature.
 
 The generated `/etc/containerd/runsc.toml` also enables
 `systemd-cgroup`, `oci-seccomp`, `directfs`, `overlay2=root:self`,

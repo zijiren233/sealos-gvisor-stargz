@@ -125,6 +125,22 @@ if [[ -z $effective_metrics && -f $runsc_toml ]]; then
 fi
 [[ $effective_metrics == none || $effective_metrics == off ]] && effective_metrics=""
 
+# Opt-in runsc stream port forwarding (containerd-gvisor-pf builds):
+# kubelet port-forwards bridge into the gVisor Sentry netstack instead
+# of entering the sandbox network namespace, so applications listening
+# on the sandbox loopback become reachable. Stock containerd ignores
+# the extra handler fields, so enabling is safe cluster-wide.
+port_forward_enabled=0
+if [[ ${GVISOR_PORT_FORWARD:-false} == true ]]; then
+  # Both fields must be absolute paths and are always written together.
+  port_forward_binary=${GVISOR_PORT_FORWARD_BINARY:-/usr/local/bin/runsc}
+  port_forward_root=${GVISOR_PORT_FORWARD_ROOT:-${GVISOR_ROOT:-/run/containerd/runsc}/k8s.io}
+  [[ $port_forward_binary == /* ]] || die 'GVISOR_PORT_FORWARD_BINARY must be an absolute path'
+  [[ $port_forward_root == /* ]] || die 'GVISOR_PORT_FORWARD_ROOT must be an absolute path'
+  port_forward_enabled=1
+  log "runsc stream port forwarding enabled (binary=$port_forward_binary root=$port_forward_root)"
+fi
+
 render_runsc_toml() {
   local platform=${GVISOR_PLATFORM:-systrap}
   local network=${GVISOR_NETWORK:-sandbox}
@@ -158,6 +174,12 @@ render_containerd_config() {
   runtime_type = "io.containerd.runsc.v1"
   snapshotter = "overlayfs"
   privileged_without_host_devices = true
+EOF
+  if [[ $port_forward_enabled -eq 1 ]]; then
+    printf '  runsc_port_forward_binary = "%s"\n  runsc_port_forward_root = "%s"\n' \
+      "$port_forward_binary" "$port_forward_root" >>"$blocks"
+  fi
+  cat >>"$blocks" <<'EOF'
 [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc.options]
   TypeUrl = "io.containerd.runsc.v1.options"
   ConfigPath = "/etc/containerd/runsc.toml"
