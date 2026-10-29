@@ -47,12 +47,56 @@ artifact="stargz-snapshotter-${expected_version}-linux-${arch}.tar.gz"
 tarball=$payload_dir/$artifact
 [[ -f $tarball ]] || die "$tarball not in image; cluster image architecture does not match this node"
 
-apply_runtimeclass() {
-  if command -v kubectl >/dev/null 2>&1; then
-    kubectl apply -f "$payload_dir/manifests/runtimeclass.yaml"
-  else
-    warn 'kubectl not found; apply stargz/manifests/runtimeclass.yaml manually'
+# kubeconfig discovery: sealos no longer distributes ~/.kube/config to
+# nodes (labring/sealos#7335), so the kubeadm admin.conf is the
+# reliable source on control-plane nodes.
+kubeconfig_path() {
+  if [[ -n ${KUBECONFIG:-} && -f ${KUBECONFIG} ]]; then
+    printf '%s\n' "$KUBECONFIG"
+    return 0
   fi
+  local candidate
+  for candidate in /root/.kube/config /etc/kubernetes/admin.conf; do
+    [[ -f $candidate ]] && { printf '%s\n' "$candidate"; return 0; }
+  done
+  return 1
+}
+
+# Cluster-scoped objects are applied by master0 only: the first
+# control-plane host of the sealos Clusterfile. The Clusterfile is
+# synced to every master, so each node can decide locally. Without any
+# Clusterfile (non-sealos cluster) any control-plane node qualifies.
+is_master0() {
+  local clusterfile master0_ip my_ips found_cf=0
+  my_ips=$(hostname -I 2>/dev/null || ip -o -4 addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
+  for clusterfile in /root/.sealos/*/Clusterfile; do
+    [[ -f $clusterfile ]] || continue
+    found_cf=1
+    master0_ip=$(awk '
+      /^[[:space:]]*- ips:/ { ing = 1; ip = ""; next }
+      ing && ip == "" && /^[[:space:]]*- [0-9a-fA-F.:+]+[[:space:]]*$/ {
+        s = $0; sub(/^[[:space:]]*-[[:space:]]*/, "", s); sub(/:.*/, "", s); ip = s; next
+      }
+      ing && ip != "" && (/^[[:space:]]*-[[:space:]]*master[[:space:]]*$/ || /^[[:space:]]*roles?:[[:space:]]*master[[:space:]]*$/) {
+        print ip; exit
+      }
+    ' "$clusterfile" 2>/dev/null) || true
+    if [[ -n $master0_ip && " $my_ips " == *" $master0_ip "* ]]; then
+      return 0
+    fi
+  done
+  [[ $found_cf -eq 0 ]]
+}
+
+apply_runtimeclass() {
+  if ! is_master0; then
+    log 'not master0; RuntimeClass is maintained by master0 only'
+    return 0
+  fi
+  local kubeconfig
+  command -v kubectl >/dev/null 2>&1 || { warn 'kubectl not found on master0; apply the RuntimeClass manifest manually'; return 0; }
+  kubeconfig=$(kubeconfig_path) || { warn 'no kubeconfig found (KUBECONFIG, /root/.kube/config, /etc/kubernetes/admin.conf); apply the RuntimeClass manifest manually'; return 0; }
+  kubectl --kubeconfig "$kubeconfig" apply -f "$payload_dir/manifests/runtimeclass.yaml"
 }
 
 is_control_plane() {
