@@ -1,7 +1,7 @@
 FROM scratch
 LABEL sealos.io.type="patch"
 ENV STARGZ_SKIP_MASTERS="false" \
-    STARGZ_ROOT="/var/lib/containerd/stargz-snapshotter" \
+    STARGZ_ROOT="/var/lib/containerd-stargz-grpc" \
     STARGZ_RUN_DIR="/run/containerd-stargz-grpc" \
     STARGZ_REWIRE_CRI_SHIM="true" \
     STARGZ_INSECURE_REGISTRY="sealos.hub:5000"

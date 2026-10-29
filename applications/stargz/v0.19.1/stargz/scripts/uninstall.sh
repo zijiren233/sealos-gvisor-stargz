@@ -14,12 +14,20 @@ die() { printf '[stargz] ERROR: %s\n' "$*" >&2; exit 1; }
 
 cfg=/etc/containerd/config.toml
 shim_cfg=/etc/image-cri-shim.yaml
-stargz_service=containerd-stargz-grpc.service
+stargz_service=stargz-snapshotter.service
 bin_dir=/usr/local/bin
-stargz_root=${STARGZ_ROOT:-/var/lib/containerd/stargz-snapshotter}
+stargz_root=${STARGZ_ROOT:-/var/lib/containerd-stargz-grpc}
 run_dir=${STARGZ_RUN_DIR:-/run/containerd-stargz-grpc}
 purge_data=false
 [[ ${1:-} == --purge-data ]] && purge_data=true
+
+# State on the node wins over env defaults, mirroring install.sh.
+if [[ -f /etc/containerd-stargz-grpc/config.toml ]]; then
+  state_root=$(sed -nE 's/^[[:space:]]*root[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' /etc/containerd-stargz-grpc/config.toml | head -n1)
+  state_addr=$(sed -nE 's/^[[:space:]]*address[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' /etc/containerd-stargz-grpc/config.toml | head -n1)
+  [[ -n $state_root ]] && stargz_root=$state_root
+  [[ -n $state_addr ]] && run_dir=$(dirname "$state_addr")
+fi
 
 [[ $(id -u) -eq 0 ]] || die 'must run as root'
 command -v systemctl >/dev/null || die 'systemctl not found'
@@ -27,6 +35,15 @@ command -v systemctl >/dev/null || die 'systemctl not found'
 if systemctl is-active --quiet "$stargz_service"; then
   log 'stopping snapshotter (KillMode=process keeps the FUSE manager and its mounts alive)'
   systemctl stop "$stargz_service"
+fi
+# KillMode=process deliberately leaves the FUSE manager (and its mounts)
+# alive across service restarts; an uninstall removes everything, so the
+# manager must go too — mounts it holds die with it, as warned above.
+# (-f: the process name exceeds the 15-char comm limit; the bracket
+# pattern keeps pkill from matching its own command line.)
+if pgrep -f '[s]targz-fuse-manager' >/dev/null 2>&1; then
+  pkill -f '[s]targz-fuse-manager' || true
+  log 'stopped the leftover stargz-fuse-manager'
 fi
 
 # Point image-cri-shim back at containerd if this image rewired it.

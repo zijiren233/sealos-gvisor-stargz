@@ -90,27 +90,33 @@ Both images are sealos **patch** cluster images (`LABEL sealos.io/type="patch"`)
   `scheduling.nodeSelector` an existing RuntimeClass carries — are
   preserved instead of stripped
 
-### Adopting an existing manual stargz installation
+### Production layout parity (stargz)
 
-The stargz image takes over a pre-existing
-`stargz-snapshotter.service` layout (the manual production deploy:
-config-carried `root`/`address`, data under
-`/var/lib/containerd-stargz-grpc`, static registry credentials under
-`/etc/containerd-stargz-grpc/docker`) in place instead of refusing:
+The stargz image installs **the same layout the manual production
+deploy uses**: service `stargz-snapshotter.service`, config-carried
+`root`/`address`, data root `/var/lib/containerd-stargz-grpc`, socket
+`/run/containerd-stargz-grpc/containerd-stargz-grpc.sock`. Existing
+production nodes therefore upgrade in place — a plain version bump, no
+service rename and no data relocation:
 
-- the existing **data root, socket path and `[[resolver.host.*.mirrors]]`
-  entries are inherited**, so already-pulled snapshot data keeps working;
-  the legacy unit and config are backed up under
-  `/var/backups/sealos-stargz/legacy/` and the service normalizes to
-  `containerd-stargz-grpc.service`
+- `root`, `address` and the `[[resolver.host.*.mirrors]]` entries found
+  in an existing config are inherited on every run, so already-pulled
+  snapshot data keeps working; the data root is never moved
 - a static `/etc/containerd-stargz-grpc/docker` credential dir is kept
   and passed to the snapshotter via `DOCKER_CONFIG`; on such nodes the
   image-cri-shim `cri:` endpoint stays on `containerd.sock` (the
   existing credential flow keeps working) instead of being rewired to
   the CRI keychain
-- state on the node wins over the `STARGZ_ROOT`/`STARGZ_RUN_DIR` env
-  defaults on every rerun — relocating the data root requires editing
-  or removing the service unit first
+- the unit keeps the production name/description and config-carried
+  paths, and gains `Type=notify`, a persistent FUSE manager (mounts
+  survive snapshotter restarts from v0.19.1 on) and the CRI keychain
+- state on the node always wins over the `STARGZ_ROOT`/`STARGZ_RUN_DIR`
+  env defaults — those apply to fresh installs only
+
+> Upgrading a v0.18.2 (pre-FUSE-manager) production node restarts the
+> snapshotter once; FUSE mounts created by the old version do not
+> survive that restart, so restart stargz-scheduled workloads in the
+> same maintenance window.
 
 Everything is embedded in the image at build time (release tarballs with
 SHA verification, config files, systemd units). Nodes need no internet
@@ -139,7 +145,7 @@ The generated `/etc/containerd/runsc.toml` also enables
 | Variable | Default | Meaning |
 |---|---|---|
 | `STARGZ_SKIP_MASTERS` | `false` | skip snapshotter install on control-plane nodes |
-| `STARGZ_ROOT` | `/var/lib/containerd/stargz-snapshotter` | snapshot data root; ignored when the node already carries state (adopted layout or previous install — see above) |
+| `STARGZ_ROOT` | `/var/lib/containerd-stargz-grpc` | snapshot data root (fresh installs only; existing nodes keep the root recorded in their config) |
 | `STARGZ_RUN_DIR` | `/run/containerd-stargz-grpc` | socket/runtime dir |
 | `STARGZ_REWIRE_CRI_SHIM` | `true` | point sealos image-cri-shim's `cri:` endpoint at the stargz CRI keychain so pull credentials work; never applied while a static credential dir (`/etc/containerd-stargz-grpc/docker`) exists |
 | `STARGZ_INSECURE_REGISTRY` | `sealos.hub:5000` | comma-separated plain-HTTP registries the snapshotter may fetch from (the built-in sealos registry); empty to disable |

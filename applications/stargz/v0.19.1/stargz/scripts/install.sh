@@ -21,9 +21,9 @@ shim_cfg=/etc/image-cri-shim.yaml
 backup_root=/var/backups/sealos-stargz
 bin_dir=/usr/local/bin
 
-stargz_root=${STARGZ_ROOT:-/var/lib/containerd/stargz-snapshotter}
+stargz_root=${STARGZ_ROOT:-/var/lib/containerd-stargz-grpc}
 run_dir=${STARGZ_RUN_DIR:-/run/containerd-stargz-grpc}
-stargz_service=containerd-stargz-grpc.service
+stargz_service=stargz-snapshotter.service
 config_dir=/etc/containerd-stargz-grpc
 
 [[ $(id -u) -eq 0 ]] || die 'must run as root'
@@ -95,40 +95,22 @@ log "verifying package integrity for ${expected_version}"
 grep -Eq '^version[[:space:]]*=[[:space:]]*2([[:space:]]*#.*)?$' "$cfg" || die 'containerd config must use version = 2'
 ! grep -Eq '^[[:space:]]*imports[[:space:]]*=' "$cfg" || die 'containerd config uses imports; merge imported files first'
 
-# Effective data root and socket: state already on this node wins over
-# env defaults — repointing the snapshotter at an empty root would
-# orphan existing snapshot data. Sources, in order: this image's own
-# service unit (records --root/--address of the current install), then
-# the legacy production stargz-snapshotter.service layout (config
-# carried root/address, static docker registry auth, resolver mirrors).
-legacy_service=''
-if [[ -f /etc/systemd/system/stargz-snapshotter.service ]]; then
-  legacy_service=stargz-snapshotter.service
-fi
+# Canonical layout = the production stargz-snapshotter.service install:
+# service name stargz-snapshotter.service, config-carried root/address,
+# data root /var/lib/containerd-stargz-grpc. Existing nodes running this
+# layout upgrade in place: root, address and the resolver mirror hosts
+# found in the existing config are inherited so already-pulled snapshot
+# data keeps working; the data root is never moved.
 inherited_insecure=''
+state_root=''
+state_addr=''
 if [[ -f $config_dir/config.toml ]]; then
   inherited_insecure=$(sed -nE 's/^[[:space:]]*\[\[resolver\.host\."([^"]+)"\.mirrors\]\].*/\1/p' "$config_dir/config.toml" | paste -sd, -)
+  state_root=$(sed -nE 's/^[[:space:]]*root[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$config_dir/config.toml" | head -n1)
+  state_addr=$(sed -nE 's/^[[:space:]]*address[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$config_dir/config.toml" | head -n1)
 fi
-my_unit=/etc/systemd/system/$stargz_service
-if [[ -f $my_unit ]]; then
-  unit_root=$(sed -nE 's/.*[[:space:]]--root=([^[:space:]]+).*/\1/p' "$my_unit" | head -n1)
-  unit_addr=$(sed -nE 's/.*[[:space:]]--address=([^[:space:]]+).*/\1/p' "$my_unit" | head -n1)
-  [[ -n $unit_root ]] && stargz_root=$unit_root
-  [[ -n $unit_addr ]] && run_dir=$(dirname "$unit_addr")
-  [[ -z $legacy_service ]] || log "displacing leftover $legacy_service"
-elif [[ -n $legacy_service ]]; then
-  legacy_config=$config_dir/config.toml
-  [[ -f $legacy_config ]] || die "found $legacy_service but no $legacy_config; refusing to adopt an unknown layout"
-  legacy_root=$(sed -nE 's/^[[:space:]]*root[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$legacy_config" | head -n1)
-  legacy_addr=$(sed -nE 's/^[[:space:]]*address[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$legacy_config" | head -n1)
-  [[ -n $legacy_root && -n $legacy_addr ]] || die "cannot read root/address from $legacy_config; refusing to adopt an unknown layout"
-  install -d -m 700 "$backup_root/legacy" 2>/dev/null || true
-  cp -a "$legacy_config" "$backup_root/legacy/config.toml.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
-  cp -a "/etc/systemd/system/$legacy_service" "$backup_root/legacy/" 2>/dev/null || true
-  stargz_root=$legacy_root
-  run_dir=$(dirname "$legacy_addr")
-  log "adopting legacy $legacy_service layout: root=$stargz_root address=$legacy_addr mirrors=${inherited_insecure:-none}"
-fi
+[[ -n $state_root ]] && stargz_root=$state_root
+[[ -n $state_addr ]] && run_dir=$(dirname "$state_addr")
 
 cri_sock=$run_dir/cri.sock
 snapshot_sock=$run_dir/containerd-stargz-grpc.sock
@@ -179,6 +161,9 @@ write_if_changed() {
 log 'writing snapshotter configuration and systemd units'
 render_stargz_toml() {
   cat <<EOF
+version = 1
+root = "$stargz_root"
+address = "$snapshot_sock"
 no_background_fetch = true
 noprefetch = false
 allow_no_verification = false
@@ -219,13 +204,14 @@ EOF
 render_service() {
   cat <<EOF
 [Unit]
-Description=Stargz snapshotter with persistent FUSE manager
+Description=Stargz Snapshotter
+Documentation=https://github.com/containerd/stargz-snapshotter
 After=network.target
 Before=containerd.service
 RequiresMountsFor=$stargz_root
 [Service]
 Type=notify
-ExecStart=$bin_dir/containerd-stargz-grpc --address=$snapshot_sock --config=$config_dir/config.toml --root=$stargz_root --log-level=info
+ExecStart=$bin_dir/containerd-stargz-grpc --config=$config_dir/config.toml --log-level=info
 Restart=always
 RestartSec=5
 KillMode=process
@@ -409,11 +395,6 @@ fi
 
 containerd --config "$cfg" config dump >/dev/null || die 'containerd rejected the merged configuration'
 
-if [[ -n $legacy_service ]]; then
-  systemctl disable --now "$legacy_service" >/dev/null 2>&1 || true
-  rm -f "/etc/systemd/system/$legacy_service"
-  log "removed legacy $legacy_service (unit and config backed up under $backup_root/legacy)"
-fi
 systemctl daemon-reload
 systemctl enable --now "$stargz_service" >/dev/null
 
