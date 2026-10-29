@@ -68,10 +68,12 @@ is_control_plane() {
   [[ -f /etc/kubernetes/manifests/kube-apiserver.yaml ]]
 }
 
-# Control-plane policy: by default keep the runtime off control-plane
-# nodes and only maintain the RuntimeClass object there. Single-node
-# clusters must set GVISOR_SKIP_MASTERS=false.
-if is_control_plane && [[ ${GVISOR_SKIP_MASTERS:-true} == true ]]; then
+# Control-plane policy: install on every node by default so control-plane
+# nodes can run gvisor pods too. Set GVISOR_SKIP_MASTERS=true to keep the
+# runtime off control-plane nodes. Detecting a control plane relies on the
+# kube-apiserver static-pod manifest, which also exists on standalone
+# control-plane nodes (kubelet without node registration).
+if is_control_plane && [[ ${GVISOR_SKIP_MASTERS:-false} == true ]]; then
   log 'control-plane node: skipping runtime install, applying RuntimeClass only'
   apply_runtimeclass
   exit 0

@@ -50,7 +50,9 @@ is_control_plane() {
   [[ -f /etc/kubernetes/manifests/kube-apiserver.yaml ]]
 }
 
-if is_control_plane && [[ ${STARGZ_GVISOR_SKIP_MASTERS:-true} == true ]]; then
+# Register the handler on every node by default; set
+# STARGZ_GVISOR_SKIP_MASTERS=true to leave control-plane nodes untouched.
+if is_control_plane && [[ ${STARGZ_GVISOR_SKIP_MASTERS:-false} == true ]]; then
   log 'control-plane node: skipping handler registration, applying RuntimeClass only'
   apply_runtimeclass
   exit 0

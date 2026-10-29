@@ -75,7 +75,10 @@ is_control_plane() {
   [[ -f /etc/kubernetes/manifests/kube-apiserver.yaml ]]
 }
 
-if is_control_plane && [[ ${STARGZ_SKIP_MASTERS:-true} == true ]]; then
+# Install on every node by default; set STARGZ_SKIP_MASTERS=true to keep
+# the snapshotter off control-plane nodes. On such nodes the CRI keychain
+# also serves static-pod pulls.
+if is_control_plane && [[ ${STARGZ_SKIP_MASTERS:-false} == true ]]; then
   log 'control-plane node: skipping snapshotter install, applying RuntimeClass only'
   apply_runtimeclass
   exit 0

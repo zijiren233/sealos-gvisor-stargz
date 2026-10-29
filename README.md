@@ -71,12 +71,18 @@ Both images are sealos **patch** cluster images (`LABEL sealos.io/type="patch"`)
   the previous binaries and config are backed up under
   `/var/backups/sealos-{gvisor,stargz}/` and containerd is restarted
   only when the effective configuration actually changed)
-- control-plane nodes are skipped by default; cluster-scoped objects
-  (RuntimeClasses) are applied only on nodes holding a kubeconfig
-  (`$KUBECONFIG` or `/root/.kube/config`) — recent sealos keeps
-  `~/.kube/config` on master0 only, so in practice that node applies
-  them ([labring/sealos#7335](https://github.com/labring/sealos/pull/7335)).
-  Set `*_SKIP_MASTERS=false` for single-node clusters.
+- all nodes install by default, control-plane nodes included; set the
+  per-image `*_SKIP_MASTERS=true` to keep control-plane nodes clean.
+  Control-plane nodes run the control plane as static pods, so the
+  one-time containerd restart there also restarts that node's static
+  pods (kube-apiserver, etcd, ...); on a 3-master cluster etcd keeps
+  quorum while sealos applies nodes one at a time. On such nodes the
+  stargz CRI keychain also serves static-pod pulls.
+- cluster-scoped objects (RuntimeClasses) are applied only on nodes
+  holding a kubeconfig (`$KUBECONFIG` or `/root/.kube/config`) — recent
+  sealos keeps `~/.kube/config` on master0 only, so in practice that
+  node applies them
+  ([labring/sealos#7335](https://github.com/labring/sealos/pull/7335)).
 - restarting containerd briefly interrupts CRI on that node; existing
   containers keep running, new pulls/creates retry
 
@@ -92,7 +98,7 @@ Environment variables can be passed with `sealos run -e KEY=VALUE`.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `GVISOR_SKIP_MASTERS` | `true` | skip runtime install on control-plane nodes |
+| `GVISOR_SKIP_MASTERS` | `false` | skip runtime install on control-plane nodes |
 | `GVISOR_PLATFORM` | `systrap` | gVisor platform |
 | `GVISOR_NETWORK` | `sandbox` | gVisor network mode |
 | `GVISOR_ROOT` | `/run/containerd/runsc` | runsc state root |
@@ -106,7 +112,7 @@ The generated `/etc/containerd/runsc.toml` also enables
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `STARGZ_SKIP_MASTERS` | `true` | skip snapshotter install on control-plane nodes |
+| `STARGZ_SKIP_MASTERS` | `false` | skip snapshotter install on control-plane nodes |
 | `STARGZ_ROOT` | `/var/lib/containerd/stargz-snapshotter` | snapshot data root |
 | `STARGZ_RUN_DIR` | `/run/containerd-stargz-grpc` | socket/runtime dir |
 | `STARGZ_REWIRE_CRI_SHIM` | `true` | point sealos image-cri-shim's `cri:` endpoint at the stargz CRI keychain so pull credentials work |
@@ -124,7 +130,7 @@ registry must be listed as insecure for eStargz pulls from it to work.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `STARGZ_GVISOR_SKIP_MASTERS` | `true` | skip handler registration on control-plane nodes |
+| `STARGZ_GVISOR_SKIP_MASTERS` | `false` | skip handler registration on control-plane nodes |
 
 The combined image registers the `runsc-stargz` handler (runtime
 `io.containerd.runsc.v1`, snapshotter `stargz`) and applies the

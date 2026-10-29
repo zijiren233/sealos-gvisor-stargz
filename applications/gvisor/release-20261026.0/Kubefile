@@ -1,6 +1,6 @@
 FROM scratch
 LABEL sealos.io.type="patch"
-ENV GVISOR_SKIP_MASTERS="true" \
+ENV GVISOR_SKIP_MASTERS="false" \
     GVISOR_PLATFORM="systrap" \
     GVISOR_NETWORK="sandbox" \
     GVISOR_ROOT="/run/containerd/runsc" \
