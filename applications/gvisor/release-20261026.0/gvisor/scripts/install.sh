@@ -61,7 +61,13 @@ apply_runtimeclass() {
     return 0
   fi
   command -v kubectl >/dev/null 2>&1 || { warn 'kubectl not found; apply the RuntimeClass manifest manually'; return 0; }
-  kubectl --kubeconfig "$kubeconfig" apply -f "$payload_dir/manifests/runtimeclass.yaml"
+  # Server-side apply keeps fields this image does not own (e.g. a
+  # scheduling.nodeSelector an existing RuntimeClass carries); plain
+  # client-side apply would strip them.
+  if ! kubectl --kubeconfig "$kubeconfig" apply --server-side --field-manager=sealos-gvisor-image -f "$payload_dir/manifests/runtimeclass.yaml" 2>/dev/null; then
+    warn 'server-side apply unavailable; falling back to client-side apply'
+    kubectl --kubeconfig "$kubeconfig" apply -f "$payload_dir/manifests/runtimeclass.yaml"
+  fi
 }
 
 is_control_plane() {

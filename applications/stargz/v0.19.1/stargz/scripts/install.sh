@@ -25,8 +25,6 @@ stargz_root=${STARGZ_ROOT:-/var/lib/containerd/stargz-snapshotter}
 run_dir=${STARGZ_RUN_DIR:-/run/containerd-stargz-grpc}
 stargz_service=containerd-stargz-grpc.service
 config_dir=/etc/containerd-stargz-grpc
-cri_sock=$run_dir/cri.sock
-snapshot_sock=$run_dir/containerd-stargz-grpc.sock
 
 [[ $(id -u) -eq 0 ]] || die 'must run as root'
 
@@ -68,7 +66,13 @@ apply_runtimeclass() {
     return 0
   fi
   command -v kubectl >/dev/null 2>&1 || { warn 'kubectl not found; apply the RuntimeClass manifest manually'; return 0; }
-  kubectl --kubeconfig "$kubeconfig" apply -f "$payload_dir/manifests/runtimeclass.yaml"
+  # Server-side apply keeps fields this image does not own (e.g. a
+  # scheduling.nodeSelector an existing RuntimeClass carries); plain
+  # client-side apply would strip them.
+  if ! kubectl --kubeconfig "$kubeconfig" apply --server-side --field-manager=sealos-stargz-image -f "$payload_dir/manifests/runtimeclass.yaml" 2>/dev/null; then
+    warn 'server-side apply unavailable; falling back to client-side apply'
+    kubectl --kubeconfig "$kubeconfig" apply -f "$payload_dir/manifests/runtimeclass.yaml"
+  fi
 }
 
 is_control_plane() {
@@ -91,11 +95,43 @@ log "verifying package integrity for ${expected_version}"
 grep -Eq '^version[[:space:]]*=[[:space:]]*2([[:space:]]*#.*)?$' "$cfg" || die 'containerd config must use version = 2'
 ! grep -Eq '^[[:space:]]*imports[[:space:]]*=' "$cfg" || die 'containerd config uses imports; merge imported files first'
 
-# A stargz installation this image does not manage: refuse rather than
-# fight an unknown service layout for the snapshot data root.
+# Effective data root and socket: state already on this node wins over
+# env defaults — repointing the snapshotter at an empty root would
+# orphan existing snapshot data. Sources, in order: this image's own
+# service unit (records --root/--address of the current install), then
+# the legacy production stargz-snapshotter.service layout (config
+# carried root/address, static docker registry auth, resolver mirrors).
+legacy_service=''
 if [[ -f /etc/systemd/system/stargz-snapshotter.service ]]; then
-  die 'found an unmanaged stargz-snapshotter.service; this image only manages its own containerd-stargz-grpc.service layout'
+  legacy_service=stargz-snapshotter.service
 fi
+inherited_insecure=''
+if [[ -f $config_dir/config.toml ]]; then
+  inherited_insecure=$(sed -nE 's/^[[:space:]]*\[\[resolver\.host\."([^"]+)"\.mirrors\]\].*/\1/p' "$config_dir/config.toml" | paste -sd, -)
+fi
+my_unit=/etc/systemd/system/$stargz_service
+if [[ -f $my_unit ]]; then
+  unit_root=$(sed -nE 's/.*[[:space:]]--root=([^[:space:]]+).*/\1/p' "$my_unit" | head -n1)
+  unit_addr=$(sed -nE 's/.*[[:space:]]--address=([^[:space:]]+).*/\1/p' "$my_unit" | head -n1)
+  [[ -n $unit_root ]] && stargz_root=$unit_root
+  [[ -n $unit_addr ]] && run_dir=$(dirname "$unit_addr")
+  [[ -z $legacy_service ]] || log "displacing leftover $legacy_service"
+elif [[ -n $legacy_service ]]; then
+  legacy_config=$config_dir/config.toml
+  [[ -f $legacy_config ]] || die "found $legacy_service but no $legacy_config; refusing to adopt an unknown layout"
+  legacy_root=$(sed -nE 's/^[[:space:]]*root[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$legacy_config" | head -n1)
+  legacy_addr=$(sed -nE 's/^[[:space:]]*address[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$legacy_config" | head -n1)
+  [[ -n $legacy_root && -n $legacy_addr ]] || die "cannot read root/address from $legacy_config; refusing to adopt an unknown layout"
+  install -d -m 700 "$backup_root/legacy" 2>/dev/null || true
+  cp -a "$legacy_config" "$backup_root/legacy/config.toml.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
+  cp -a "/etc/systemd/system/$legacy_service" "$backup_root/legacy/" 2>/dev/null || true
+  stargz_root=$legacy_root
+  run_dir=$(dirname "$legacy_addr")
+  log "adopting legacy $legacy_service layout: root=$stargz_root address=$legacy_addr mirrors=${inherited_insecure:-none}"
+fi
+
+cri_sock=$run_dir/cri.sock
+snapshot_sock=$run_dir/containerd-stargz-grpc.sock
 
 config_changed=0
 fresh_install=1
@@ -166,6 +202,9 @@ EOF
   # snapshotter resolves and fetches layers on its own, so it needs this
   # even though containerd itself is already configured for the registry.
   local registries=${STARGZ_INSECURE_REGISTRY-sealos.hub:5000}
+  if [[ -n $inherited_insecure ]]; then
+    registries=$(printf '%s\n' "${registries:+${registries},}${inherited_insecure}" | tr ',' '\n' | awk 'NF && !seen[$0]++' | paste -sd, -)
+  fi
   local registry
   for registry in ${registries//,/ }; do
     [[ -n $registry ]] || continue
@@ -193,6 +232,13 @@ KillMode=process
 LimitNOFILE=1048576
 TasksMax=infinity
 Delegate=yes
+EOF
+  # Static registry credentials (adopted legacy installs keep theirs at
+  # /etc/containerd-stargz-grpc/docker) stay in effect via DOCKER_CONFIG.
+  if [[ -d $config_dir/docker ]]; then
+    printf 'Environment="DOCKER_CONFIG=%s"\n' "$config_dir/docker"
+  fi
+  cat <<'EOF'
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -232,20 +278,23 @@ EOF
 }
 
 # The two merge helpers below replace one block group (main table plus
-# its sub table) in place, keeping its position in the stream; they
+# its sub tables) in place, keeping its position in the stream; they
 # append the group at the end only when absent. This keeps repeated runs
 # byte-stable regardless of the order other runtime images re-run.
 # Header regexes are inline (not -v variables) so backslash escapes
-# survive awk's -v escape processing.
+# survive awk's -v escape processing, and tolerate leading whitespace:
+# legacy production layouts write indented sub-table headers
+# (e.g. "  [proxy_plugins.stargz.exports]") which must be consumed as
+# part of the group or the replaced file grows duplicated tables.
 replace_handler_group() {
   local blocks=$1
   awk '
     NR==FNR { block[++n] = $0; next }
-    /^\[plugins\."io\.containerd\.grpc\.v1\.cri"\.containerd\.runtimes\.stargz\][[:space:]]*$/ {
+    /^[[:space:]]*\[plugins\."io\.containerd\.grpc\.v1\.cri"\.containerd\.runtimes\.stargz\][[:space:]]*$/ {
       if (!done) { for (i = 1; i <= n; i++) print block[i]; done = 1 }
       skip = 1; pending = 0; next
     }
-    /^\[plugins\."io\.containerd\.grpc\.v1\.cri"\.containerd\.runtimes\.stargz\.options\][[:space:]]*$/ { skip = 1; next }
+    /^[[:space:]]*\[plugins\."io\.containerd\.grpc\.v1\.cri"\.containerd\.runtimes\.stargz\.options\][[:space:]]*$/ { skip = 1; next }
     /^[[:space:]]*\[/ {
       if (skip && pending) print ""
       skip = 0
@@ -262,11 +311,11 @@ replace_proxy_group() {
   local blocks=$1
   awk '
     NR==FNR { block[++n] = $0; next }
-    /^\[proxy_plugins\.stargz\][[:space:]]*$/ {
+    /^[[:space:]]*\[proxy_plugins\.stargz\][[:space:]]*$/ {
       if (!done) { for (i = 1; i <= n; i++) print block[i]; done = 1 }
       skip = 1; pending = 0; next
     }
-    /^\[proxy_plugins\.stargz\.exports\][[:space:]]*$/ { skip = 1; next }
+    /^[[:space:]]*\[proxy_plugins\.stargz\.exports\][[:space:]]*$/ { skip = 1; next }
     /^[[:space:]]*\[/ {
       if (skip && pending) print ""
       skip = 0
@@ -331,7 +380,14 @@ write_if_changed "$cfg" <"$render_tmp" || true
 rm -f "$render_tmp"
 
 rewired_shim=0
-if [[ ${STARGZ_REWIRE_CRI_SHIM:-true} == true ]]; then
+if [[ -d $config_dir/docker ]]; then
+  # Static registry auth present: keep kubelet pulling through
+  # containerd.sock so the existing credential flow stays untouched;
+  # the snapshotter reads the same credentials via DOCKER_CONFIG.
+  if grep -Eq '^cri:[[:space:]]*(/run|/var/run)/containerd/containerd\.sock[[:space:]]*$' "$shim_cfg" 2>/dev/null; then
+    log "static registry auth present ($config_dir/docker); keeping the image-cri-shim cri endpoint on containerd.sock"
+  fi
+elif [[ ${STARGZ_REWIRE_CRI_SHIM:-true} == true ]]; then
   if [[ -f $shim_cfg ]] && grep -Eq '^cri:[[:space:]]*(/run|/var/run)/containerd/containerd\.sock[[:space:]]*$' "$shim_cfg"; then
     sed -i -E "s#^cri:[[:space:]]*(/run|/var/run)/containerd/containerd\.sock[[:space:]]*\$#cri: $cri_sock#" "$shim_cfg"
     grep -Eq "^cri:[[:space:]]*$cri_sock[[:space:]]*\$" "$shim_cfg" || die 'failed to update image-cri-shim cri endpoint'
@@ -353,6 +409,11 @@ fi
 
 containerd --config "$cfg" config dump >/dev/null || die 'containerd rejected the merged configuration'
 
+if [[ -n $legacy_service ]]; then
+  systemctl disable --now "$legacy_service" >/dev/null 2>&1 || true
+  rm -f "/etc/systemd/system/$legacy_service"
+  log "removed legacy $legacy_service (unit and config backed up under $backup_root/legacy)"
+fi
 systemctl daemon-reload
 systemctl enable --now "$stargz_service" >/dev/null
 
