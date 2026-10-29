@@ -72,12 +72,10 @@ Both images are sealos **patch** cluster images (`LABEL sealos.io/type="patch"`)
   `/var/backups/sealos-{gvisor,stargz}/` and containerd is restarted
   only when the effective configuration actually changed)
 - control-plane nodes are skipped by default; cluster-scoped objects
-  (RuntimeClasses) are applied by **master0** only — the first
-  control-plane host of the sealos Clusterfile — and only when a
-  kubeconfig is reachable (`KUBECONFIG`, `/root/.kube/config` or
-  `/etc/kubernetes/admin.conf`; recent sealos no longer distributes
-  `~/.kube/config` to nodes, see
-  [labring/sealos#7335](https://github.com/labring/sealos/pull/7335)).
+  (RuntimeClasses) are applied only on nodes holding a kubeconfig
+  (`$KUBECONFIG` or `/root/.kube/config`) — recent sealos keeps
+  `~/.kube/config` on master0 only, so in practice that node applies
+  them ([labring/sealos#7335](https://github.com/labring/sealos/pull/7335)).
   Set `*_SKIP_MASTERS=false` for single-node clusters.
 - restarting containerd briefly interrupts CRI on that node; existing
   containers keep running, new pulls/creates retry
