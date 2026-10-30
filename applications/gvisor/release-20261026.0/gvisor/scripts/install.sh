@@ -281,5 +281,9 @@ else
   warn 'crictl not found; skipping CRI health check'
 fi
 
-apply_runtimeclass
+if is_control_plane; then
+  apply_runtimeclass
+else
+  log 'worker node: RuntimeClass is applied on control-plane nodes only'
+fi
 log "gVisor ${expected_version} installed (handler: runsc, RuntimeClass: gvisor)"

@@ -428,5 +428,9 @@ else
 fi
 "$bin_dir/containerd-stargz-grpc" --version | head -n1
 
-apply_runtimeclass
+if is_control_plane; then
+  apply_runtimeclass
+else
+  log 'worker node: RuntimeClass is applied on control-plane nodes only'
+fi
 log "stargz-snapshotter ${expected_version} installed (handler: stargz, RuntimeClass: stargz)"

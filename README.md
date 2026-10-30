@@ -78,8 +78,9 @@ Both images are sealos **patch** cluster images (`LABEL sealos.io/type="patch"`)
   pods (kube-apiserver, etcd, ...); on a 3-master cluster etcd keeps
   quorum while sealos applies nodes one at a time. On such nodes the
   stargz CRI keychain also serves static-pod pulls.
-- cluster-scoped objects (RuntimeClasses) are applied only on nodes
-  holding a kubeconfig (`$KUBECONFIG` or `/root/.kube/config`) — recent
+- cluster-scoped objects (RuntimeClasses) are applied only on
+  control-plane nodes; among those, only nodes holding a kubeconfig
+  (`$KUBECONFIG` or `/root/.kube/config`) perform the apply — recent
   sealos keeps `~/.kube/config` on master0 only, so in practice that
   node applies them
   ([labring/sealos#7335](https://github.com/labring/sealos/pull/7335)).
