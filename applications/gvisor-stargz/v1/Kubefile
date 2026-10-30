@@ -1,0 +1,5 @@
+FROM scratch
+LABEL sealos.io.type="patch"
+ENV GVISOR_STARGZ_SKIP_MASTERS="false"
+COPY gvisor-stargz gvisor-stargz
+CMD ["bash gvisor-stargz/scripts/install.sh"]

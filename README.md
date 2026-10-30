@@ -8,7 +8,7 @@ cluster:
 |---|---|---|---|
 | gvisor | `ghcr.io/zijiren233/gvisor:<release>` | gVisor `runsc` + `containerd-shim-runsc-v1` | `gvisor` (handler `runsc`) |
 | stargz | `ghcr.io/zijiren233/stargz:<version>` | stargz-snapshotter (`containerd-stargz-grpc`, persistent FUSE manager, CRI keychain) | `stargz` (handler `stargz`) |
-| stargz-gvisor | `ghcr.io/zijiren233/stargz-gvisor:v1` | combined handler registration only (no binaries); requires both images above | `gvisor-stargz` (handler `runsc-stargz`) |
+| gvisor-stargz | `ghcr.io/zijiren233/gvisor-stargz:v1` | combined handler registration only (no binaries); requires both images above | `gvisor-stargz` (handler `runsc-stargz`) |
 
 Each image is self-contained and independent: they can be installed alone
 or together, in any order.
@@ -18,7 +18,7 @@ or together, in any order.
 ```bash
 sealos run ghcr.io/zijiren233/gvisor:release-20261026.0
 sealos run ghcr.io/zijiren233/stargz:v0.19.1
-sealos run ghcr.io/zijiren233/stargz-gvisor:v1   # optional: combined runsc + stargz handler
+sealos run ghcr.io/zijiren233/gvisor-stargz:v1   # optional: combined runsc + stargz handler
 ```
 
 Then schedule pods with the corresponding `runtimeClassName: gvisor`,
@@ -139,7 +139,7 @@ Environment variables can be passed with `sealos run -e KEY=VALUE`.
 | `GVISOR_PORT_FORWARD_BINARY` | `/usr/local/bin/runsc` | helper binary passed to containerd; must be an absolute path |
 | `GVISOR_PORT_FORWARD_ROOT` | `$GVISOR_ROOT/k8s.io` | runsc runtime root for CRI sandbox lookup; must be an absolute path |
 
-The combined `stargz-gvisor` image mirrors the `runsc` handler's
+The combined `gvisor-stargz` image mirrors the `runsc` handler's
 port-forward setting onto `runsc-stargz` automatically — the gvisor
 image is the single control point for the feature.
 
@@ -165,11 +165,11 @@ restarts), the CRI keychain (which also inherits containerd's
 images is done by the snapshotter itself, so the built-in sealos
 registry must be listed as insecure for eStargz pulls from it to work.
 
-### stargz-gvisor
+### gvisor-stargz
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `STARGZ_GVISOR_SKIP_MASTERS` | `false` | skip handler registration on control-plane nodes |
+| `GVISOR_STARGZ_SKIP_MASTERS` | `false` | skip handler registration on control-plane nodes |
 
 The combined image registers the `runsc-stargz` handler (runtime
 `io.containerd.runsc.v1`, snapshotter `stargz`) and applies the
@@ -224,7 +224,7 @@ applications/
     └── stargz/{scripts,manifests}/...
 ```
 
-`stargz-gvisor/v1/` follows the same layout without `init.sh` — it
+`gvisor-stargz/v1/` follows the same layout without `init.sh` — it
 embeds no release payloads.
 
 Build locally:

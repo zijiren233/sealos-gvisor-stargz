@@ -7,14 +7,14 @@
 set -euo pipefail
 umask 022
 
-log() { printf '[stargz-gvisor] %s\n' "$*"; }
-warn() { printf '[stargz-gvisor] WARN: %s\n' "$*" >&2; }
-die() { printf '[stargz-gvisor] ERROR: %s\n' "$*" >&2; exit 1; }
+log() { printf '[gvisor-stargz] %s\n' "$*"; }
+warn() { printf '[gvisor-stargz] WARN: %s\n' "$*" >&2; }
+die() { printf '[gvisor-stargz] ERROR: %s\n' "$*" >&2; exit 1; }
 
 payload_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cfg=/etc/containerd/config.toml
 runsc_toml=/etc/containerd/runsc.toml
-backup_root=/var/backups/sealos-stargz-gvisor
+backup_root=/var/backups/sealos-gvisor-stargz
 
 [[ $(id -u) -eq 0 ]] || die 'must run as root'
 
@@ -46,7 +46,7 @@ apply_runtimeclass() {
   # Server-side apply keeps fields this image does not own (e.g. a
   # scheduling.nodeSelector an existing RuntimeClass carries); plain
   # client-side apply would strip them.
-  if ! kubectl --kubeconfig "$kubeconfig" apply --server-side --field-manager=sealos-stargz-gvisor-image -f "$payload_dir/manifests/runtimeclass.yaml" 2>/dev/null; then
+  if ! kubectl --kubeconfig "$kubeconfig" apply --server-side --field-manager=sealos-gvisor-stargz-image -f "$payload_dir/manifests/runtimeclass.yaml" 2>/dev/null; then
     warn 'server-side apply unavailable; falling back to client-side apply'
     kubectl --kubeconfig "$kubeconfig" apply -f "$payload_dir/manifests/runtimeclass.yaml"
   fi
@@ -57,8 +57,8 @@ is_control_plane() {
 }
 
 # Register the handler on every node by default; set
-# STARGZ_GVISOR_SKIP_MASTERS=true to leave control-plane nodes untouched.
-if is_control_plane && [[ ${STARGZ_GVISOR_SKIP_MASTERS:-false} == true ]]; then
+# GVISOR_STARGZ_SKIP_MASTERS=true to leave control-plane nodes untouched.
+if is_control_plane && [[ ${GVISOR_STARGZ_SKIP_MASTERS:-false} == true ]]; then
   log 'control-plane node: skipping handler registration, applying RuntimeClass only'
   apply_runtimeclass
   exit 0

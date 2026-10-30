@@ -4,9 +4,9 @@
 # installations untouched.
 set -euo pipefail
 
-log() { printf '[stargz-gvisor] %s\n' "$*"; }
-warn() { printf '[stargz-gvisor] WARN: %s\n' "$*" >&2; }
-die() { printf '[stargz-gvisor] ERROR: %s\n' "$*" >&2; exit 1; }
+log() { printf '[gvisor-stargz] %s\n' "$*"; }
+warn() { printf '[gvisor-stargz] WARN: %s\n' "$*" >&2; }
+die() { printf '[gvisor-stargz] ERROR: %s\n' "$*" >&2; exit 1; }
 
 cfg=/etc/containerd/config.toml
 runsc_root=${GVISOR_ROOT:-/run/containerd/runsc}
