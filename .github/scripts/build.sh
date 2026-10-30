@@ -15,7 +15,7 @@ VERSION=$(basename "$PWD")
 ARCH=${1:-amd64}
 
 OWNER=${GITHUB_REPOSITORY_OWNER:-zijiren233}
-REPO=${GITHUB_REPOSITORY:-zijiren233/sealos-stargz-gvisor}
+REPO=${GITHUB_REPOSITORY:-zijiren233/sealos-gvisor-stargz}
 IMAGE_REPO=${IMAGE_REPO:-"ghcr.io/${OWNER}"}
 IMAGE_NAME=${IMAGE_NAME:-"${IMAGE_REPO}/${NAME}"}
 TOKEN=${REGISTRY_TOKEN:-${GITHUB_TOKEN:-}}

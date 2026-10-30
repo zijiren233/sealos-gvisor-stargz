@@ -1,4 +1,4 @@
-# sealos-stargz-gvisor
+# sealos-gvisor-stargz
 
 Sealos cluster images (patch type) that install container runtimes and
 snapshotter layers on the nodes of an existing sealos-deployed Kubernetes
