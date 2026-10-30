@@ -68,10 +68,14 @@ apply_runtimeclass() {
   command -v kubectl >/dev/null 2>&1 || { warn 'kubectl not found; apply the RuntimeClass manifest manually'; return 0; }
   # Server-side apply keeps fields this image does not own (e.g. a
   # scheduling.nodeSelector an existing RuntimeClass carries); plain
-  # client-side apply would strip them.
-  if ! kubectl --kubeconfig "$kubeconfig" apply --server-side --field-manager=sealos-stargz-image -f "$payload_dir/manifests/runtimeclass.yaml" 2>/dev/null; then
-    warn 'server-side apply unavailable; falling back to client-side apply'
-    kubectl --kubeconfig "$kubeconfig" apply -f "$payload_dir/manifests/runtimeclass.yaml"
+  # client-side apply would strip them. A failing apply (e.g. a second
+  # node holding a kubeconfig with a rotated CA) must not fail the node
+  # install: the manifest is cluster-scoped, so any one healthy node
+  # applying it is enough.
+  if ! kubectl --kubeconfig "$kubeconfig" apply --server-side --field-manager=sealos-stargz-image -f "$payload_dir/manifests/runtimeclass.yaml" >/dev/null 2>&1; then
+    if ! kubectl --kubeconfig "$kubeconfig" apply -f "$payload_dir/manifests/runtimeclass.yaml" >/dev/null 2>&1; then
+      warn "RuntimeClass apply via $kubeconfig failed; another node holding a working kubeconfig applies it, or apply the manifest manually"
+    fi
   fi
 }
 
